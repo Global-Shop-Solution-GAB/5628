@@ -1,0 +1,170 @@
+Program.Sub.Preflight.Start
+	v.Global.sWO.Declare(string,"")
+	v.Global.sSuffix.Declare(string,"")
+	v.Global.iQty.Declare(long,0)
+	v.Global.sPart.Declare(string,"")
+Program.Sub.Preflight.End
+
+Program.Sub.Main.Start
+	f.Intrinsic.Control.Try
+		v.Local.sQty.Declare(string,"")
+		v.Local.sReplaceString.declare(string,"")
+		v.Local.sSQL.Declare(string,"")
+		v.Local.iret.Declare(long)
+		v.Local.sSerializeChecked.Declare(string)	
+		f.Intrinsic.Control.SelectCase(v.Caller.Hook)
+			f.Intrinsic.Control.Case(17262)	
+				'Hook 17262: BOM WO Post OK
+				v.Global.sWO.set(v.Passed.000013)
+				v.Global.sSuffix.set("000")
+				v.Global.iQty.set(v.Passed.000011)
+				v.Global.sPart.Set(v.Passed.000007)
+				v.Local.sSerializeChecked.Set(v.Passed.000022)
+			f.Intrinsic.Control.Case(16800)	
+				'Hook 16800: Single level WO Post OK
+				V.Global.sWO.Set(V.Passed.009000)
+				V.Global.sSuffix.Set(V.Passed.009001)
+				'Quantity and part are found in the form heading at the end of the string.  Split it out to create the quantity
+				V.Global.sPart.Set(v.Passed.000113)
+				f.Intrinsic.String.Right(v.Global.sPart,3,v.Local.sQty)
+				f.Intrinsic.String.Trim(v.Local.sQty,v.Local.sQty)
+				v.Global.iQty.Set(v.Local.sQty.Long)
+				f.Intrinsic.String.Build("Work Order:  {0}",v.Global.sWO,v.Global.sSuffix,v.Local.sReplaceString)
+				f.Intrinsic.Control.If(v.Global.sSuffix,!=,"")
+					f.Intrinsic.String.Build("{0}-{1}",v.Local.sReplaceString,v.Global.sSuffix,v.Local.sReplaceString)
+				f.Intrinsic.Control.EndIf
+				f.Intrinsic.String.Build("{0} Part:  ",v.Local.sReplaceString,v.Local.sReplaceString)
+				f.Intrinsic.String.Replace(v.Global.sPart,v.Local.sReplaceString,"",v.Global.sPart)
+				f.Intrinsic.String.Split(v.Global.sPart," ",v.Global.sPart)
+				v.Global.sPart.RedimPreserve(0,0)
+				'v.Local.sSerializeChecked.Set(v.Passed.000027)
+				f.ODBC.Connection!con.opencompanyconnection
+				f.Intrinsic.String.Build("select FLAG_SERIALIZE from v_job_header where job='{0}' and suffix='{1}';",v.Global.sWO,v.Global.sSuffix,v.Local.sSQL)
+				f.ODBC.Connection!con.executeandreturn(v.Local.sSQL,v.Local.sSerializeChecked)
+				f.ODBC.Connection!con.Close
+		f.Intrinsic.Control.EndSelect
+		
+		'If no work order has been set, the script is not being called from a correct hook and must stop.
+		f.Intrinsic.Control.If(v.Global.sWO,=,"")
+			f.Intrinsic.Control.End
+		f.Intrinsic.Control.EndIf
+		
+		'Script specification says the sequence can only support 3 characters, so stop the script if more than 3.
+		f.Intrinsic.Control.If(v.Global.iQty,>=,1000)
+			f.Intrinsic.UI.Msgbox("Maximum qty exceeded.  Must be less than 1000 to proceed.")
+			f.Intrinsic.Control.End
+		f.Intrinsic.Control.EndIf
+		
+		'Ensure that the work order has been created before creating serials
+		f.ODBC.Connection!con.opencompanyconnection
+		f.Intrinsic.String.Build("select count(*) from v_job_header where job='{0}' and suffix='{1}';",v.Global.sWO,v.Global.sSuffix,v.Local.sSQL)
+		f.ODBC.Connection!con.executeandreturn(v.Local.sSQL,v.Local.iret)
+		f.ODBC.Connection!con.Close
+		
+		f.Intrinsic.Control.If(v.Local.iret,>,0)
+			F.Intrinsic.Control.If(V.Local.sSerializeChecked,=,"Y")
+				f.Intrinsic.Control.CallSub(InsertSerial)
+			F.Intrinsic.Control.EndIf
+		f.Intrinsic.Control.EndIf
+		
+	f.Intrinsic.Control.Catch
+		f.Intrinsic.Control.CallSub(ErrorMsg, CurrentSub, v.Ambient.CurrentSubroutine)
+	f.Intrinsic.Control.EndTry
+Program.Sub.Main.End
+
+Program.Sub.InsertSerial.Start
+	f.Intrinsic.Control.Try
+		v.Local.sSQL.Declare(string)
+		v.Local.sDate.Declare(string)
+		v.Local.sTime.Declare(string)
+		v.Local.iCnt.declare(long)
+		v.Local.iSerialSeq.Declare(long)
+		v.local.sSerial.Declare(string,"")
+		v.Local.iret.Declare(long,0)
+		v.Local.sBeginningSerial.Declare(string)
+		v.Local.sEndingSerial.Declare(string)
+		v.local.sFeedback.Declare(string)
+		V.Local.iNumFailures.Declare(long)
+		v.Local.fPercent.Declare(float,0)
+		
+		f.Intrinsic.String.Build("Processing serials for job {0}...",v.Global.sWO,v.Local.sFeedback)
+		f.Intrinsic.UI.InvokeWaitDialog(v.Local.sFeedback)
+		f.Intrinsic.UI.ChangeWaitStatus(v.Local.sFeedback,0,0,1)
+		'Wait for processing of work orders and serials
+		f.ODBC.Connection!con.opencompanyconnection
+		f.Intrinsic.Control.DoUntil(v.Local.iret,=,v.Global.iQty)
+			f.Intrinsic.UI.Sleep(1)
+			f.Intrinsic.String.Build("select count(*) from v_job_serial where job='{0}' and suffix='{1}';",v.Global.sWO,v.Global.sSuffix,v.Local.sSQL)
+			f.ODBC.Connection!con.executeandreturn(v.Local.sSQL,v.Local.iret)
+			f.Intrinsic.Math.Add(v.Local.iNumFailures,1,v.Local.iNumFailures)
+			'If failure threshold has been reached, exit the sub, as there are no serials being written for this job
+			f.Intrinsic.Control.If(v.Local.iNumFailures,=,50)
+				F.Intrinsic.UI.Msgbox("Script timeout")
+				f.Intrinsic.Control.ExitSub
+			f.Intrinsic.Control.EndIf
+		f.Intrinsic.Control.Loop
+		
+		'Get the date and time for job_serial table
+		v.Local.sDate.Set(v.Ambient.Now)
+		f.Intrinsic.String.Split(v.Local.sDate," ",v.Local.sDate)
+		f.Intrinsic.String.Build("{0} {1}", v.Local.sDate(1), v.Local.sDate(2),v.Local.sTime)
+		v.Local.sDate.RedimPreserve(0,0)
+		
+		'Set the upper limit of the for loop
+		f.Intrinsic.Math.Sub(v.Global.iQty,1,v.Global.iQty)
+		
+		f.Intrinsic.Control.For(v.Local.icnt,0,v.Global.iQty,1)
+			f.Intrinsic.Control.If(v.Global.iQty,>,1)
+				f.Intrinsic.Math.Add(v.Local.iCnt,1,v.Local.iSerialSeq)
+				f.Intrinsic.String.LPad(v.Local.iSerialSeq.String,"0",3,v.Local.sSerial)
+				f.Intrinsic.String.Build("{0}{1}",v.Global.sPart,v.Local.sSerial,v.Local.sSerial)
+			f.Intrinsic.Control.Else
+				v.local.sSerial.Set(v.Global.sPart)
+			f.Intrinsic.Control.EndIf
+			
+			f.Intrinsic.Control.If(v.Local.iCnt,=,0)
+				v.Local.sBeginningSerial.Set(v.Local.sSerial)
+			f.Intrinsic.Control.EndIf
+			
+			f.Intrinsic.Control.If(v.Local.iCnt,=,v.Global.iQty)
+				v.Local.sEndingSerial.Set(v.local.sSerial)
+			f.Intrinsic.Control.EndIf
+			
+			f.Intrinsic.String.Build("insert into job_serial (job, suffix, sequence, serial_start, serial_end, date_serial, time_serial, serial_prefix, flag_status, jobs_count, userid, cert_date, quantity) values ('{0}', '{1}', '000000', '{2}', '{2}', '{3}', '{4}', '{5}', 'I', '00000001','{6}','1900-01-01',0);", v.Global.sWO,v.Global.sSuffix,v.local.sSerial,v.Local.sDate,v.Local.sTime,v.Global.sPart,v.Caller.User,v.Local.sSQL)
+			f.ODBC.Connection!con.execute(v.Local.sSQL)
+			
+			f.Intrinsic.Control.If(v.Global.iQty,=,0)
+				'Cannot divide by zero
+				v.Local.fPercent.Set(1)
+			f.Intrinsic.Control.Else
+				f.Intrinsic.Math.Div(v.Local.iCnt,v.global.iQty,v.Local.fPercent)
+			f.Intrinsic.Control.EndIf
+			
+			f.Intrinsic.UI.ChangeWaitStatus(v.Local.sFeedback,v.Local.fPercent,0,1)
+		f.Intrinsic.Control.Next(v.Local.icnt)
+		
+		'Remove the serials created by the program
+		f.Intrinsic.String.Build("delete from job_serial where job='{0}' and suffix='{1}' and serial_prefix != '{2}';", v.Global.sWO,v.Global.sSuffix,v.Global.sPart,v.Local.sSQL)
+		f.ODBC.Connection!con.execute(v.Local.sSQL)
+		f.ODBC.Connection!con.Close	
+		f.Intrinsic.UI.CloseWaitDialog
+		'Feedback to the user
+		f.Intrinsic.String.Build("Serials {0} through {1} have been assigned to job {2}.  All other serials (if any) created for this job by core Global Shop have been deleted.",v.Local.sBeginningSerial,v.Local.sEndingSerial,v.Global.sWO,v.Local.sFeedback)
+		f.Intrinsic.UI.Msgbox(v.Local.sFeedback,"Serial Creation Complete")
+	f.Intrinsic.Control.Catch
+		f.Intrinsic.Control.CallSub(ErrorMsg, CurrentSub, v.Ambient.CurrentSubroutine)
+	f.Intrinsic.Control.EndTry
+Program.Sub.InsertSerial.End
+
+Program.Sub.ErrorMsg.Start
+v.Local.sError.Declare
+
+'Closes ODBC connection, default to connection : "con"
+f.Intrinsic.Control.If(v.ODBC!con.State, =, 1)
+	f.ODBC.Connection!con.Close
+f.Intrinsic.Control.EndIf
+
+'Generic Error message.
+f.Intrinsic.String.Build("Project GCG_5628_AssignSerialNumbersToWO.g2u {0}{0}Subroutine: {1}{0}Error: {2} with Description: {3}", v.Ambient.NewLine, v.Args.CurrentSub, v.Ambient.ErrorNumber, v.Ambient.ErrorDescription, v.Local.sError)
+f.Intrinsic.UI.Msgbox(v.Local.sError)
+Program.Sub.ErrorMsg.End
